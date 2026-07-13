@@ -1,0 +1,5 @@
+timestamp,type,location,notes,source_event_id
+2026-07-13T14:00:00Z,builder,Pod A / Rack 3,"Seedlings looking healthy, growth on track",bu-001
+2026-07-13T16:30:00Z,builder,Pod B,"Nutrient pump blocked, waiting on replacement part",bu-002
+2026-07-13T18:00:00Z,experiment,Pod C,"Started A/B trial: 16h vs 18h light cycle, measuring yield",bu-003
+2026-07-13T20:30:00Z,builder,Pod A / Rack 1,"Harvested basil, batch completed successfully",bu-004

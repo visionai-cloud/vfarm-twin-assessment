@@ -1,0 +1,17 @@
+# Optional: the "real" stack target. `docker compose up -d` then set
+#   DATABASE_URL=postgresql+psycopg://vfarm:vfarm@localhost:5432/vfarm
+# (add the psycopg driver: `pip install "psycopg[binary]"`).
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: vfarm
+      POSTGRES_PASSWORD: vfarm
+      POSTGRES_DB: vfarm
+    ports:
+      - "5432:5432"
+    volumes:
+      - vfarm_pg:/var/lib/postgresql/data
+
+volumes:
+  vfarm_pg:

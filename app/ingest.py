@@ -1,0 +1,90 @@
+"""Ingestion service — the single funnel both sources flow through.
+
+Source A (webhook) and Source B (sheet poller) both call `ingest_events`.
+Everything upstream of this is "get raw dicts"; everything here down is
+normalize -> tag -> append. New sources reuse this untouched.
+"""
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from .models import SCHEMA_VERSION, FarmEvent
+from .normalize import normalize_event
+from .tagging import derive_tags
+
+
+def _new_id() -> str:
+    return str(uuid.uuid4())
+
+
+def build_event(source: str, raw_payload: dict, *, now: datetime) -> FarmEvent:
+    """Pure-ish assembler: raw dict -> a FarmEvent row (not yet persisted)."""
+    norm = normalize_event(source, raw_payload, now=now)
+    tags = derive_tags(norm["event_type"], norm["notes"])
+    return FarmEvent(
+        id=_new_id(),
+        source=norm["source"],
+        source_event_id=norm["source_event_id"],
+        dedup_hash=norm["dedup_hash"],
+        event_time=norm["event_time"],
+        received_at=now,
+        event_type=norm["event_type"],
+        location=norm["location"],
+        notes=norm["notes"],
+        tags=tags,
+        raw_payload=raw_payload,
+        normalized=_normalized_view(norm, tags),
+        schema_version=SCHEMA_VERSION,
+    )
+
+
+def _normalized_view(norm: dict, tags: list[str]) -> dict:
+    return {
+        "event_time": norm["event_time"].isoformat(),
+        "event_type": norm["event_type"],
+        "location": norm["location"],
+        "notes": norm["notes"],
+        "tags": tags,
+    }
+
+
+def ingest_events(session: Session, source: str, raw_payloads: list[dict]) -> dict:
+    """Append a batch. Idempotent: rows whose dedup_hash already exists are
+    skipped, never overwritten. Returns a summary of what happened.
+    """
+    now = datetime.now(timezone.utc)
+    stored_ids: list[str] = []
+    duplicates = 0
+
+    # Dedup within the incoming batch first (same event twice in one payload).
+    seen_in_batch: set[str] = set()
+    candidates: list[FarmEvent] = []
+    for raw in raw_payloads:
+        event = build_event(source, raw, now=now)
+        if event.dedup_hash in seen_in_batch:
+            duplicates += 1
+            continue
+        seen_in_batch.add(event.dedup_hash)
+        candidates.append(event)
+
+    # Dedup against what's already stored.
+    if candidates:
+        hashes = [e.dedup_hash for e in candidates]
+        existing = set(
+            session.scalars(
+                select(FarmEvent.dedup_hash).where(FarmEvent.dedup_hash.in_(hashes))
+            ).all()
+        )
+        for event in candidates:
+            if event.dedup_hash in existing:
+                duplicates += 1
+                continue
+            session.add(event)
+            stored_ids.append(event.id)
+        session.commit()
+
+    return {"stored": len(stored_ids), "duplicates": duplicates, "ids": stored_ids}
