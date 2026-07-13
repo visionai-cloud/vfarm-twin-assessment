@@ -18,10 +18,14 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 
-uvicorn app.main:app --reload            # API on http://127.0.0.1:8000
-# in another shell:
-python poller.py                         # Source B: polls the sheet on a schedule
-pytest -q                                # 25 tests, all green
+# API on http://127.0.0.1:8000
+uvicorn app.main:app --reload
+
+# in another shell — Source B: polls the sheet on a schedule
+python poller.py
+
+# run the tests (25, all green)
+pytest -q
 ```
 
 Then:
