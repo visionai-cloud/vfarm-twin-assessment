@@ -1,0 +1,197 @@
+{
+  "info": {
+    "name": "vFarm Event Ingestion + Summary",
+    "description": "Ingest farm events from two sources (webhook + sheet), store them with raw/normalized/derived separation, and return a 24h summary shaped for an AI agent to narrate.\n\nSet the collection variables `baseUrl` and `webhookToken` (Variables tab). Defaults match `.env.example`.\n\nSuggested run order: Health -> Webhook (denied) -> Webhook (sensor blocker) -> Webhook (builder success) -> Webhook (idempotent re-delivery) -> Sheet ingest -> Summary.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8000", "type": "string" },
+    { "key": "webhookToken", "value": "dev-secret-change-me", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] },
+        "description": "Liveness probe."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('status ok', () => pm.expect(pm.response.json().status).to.eql('ok'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Source A - Webhook",
+      "item": [
+        {
+          "name": "Webhook - DENIED (no token)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"sensor\",\n  \"location\": \"Pod B\",\n  \"notes\": \"temp spike\",\n  \"source_event_id\": \"evt-denied\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/ingest/webhook", "host": ["{{baseUrl}}"], "path": ["ingest", "webhook"] },
+            "description": "No X-VFarm-Token header -> should be rejected with 401."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Webhook - sensor blocker (ALLOWED)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-VFarm-Token", "value": "{{webhookToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"sensor\",\n  \"timestamp\": \"2026-07-13T21:00:00Z\",\n  \"location\": \"Pod B / Rack 2\",\n  \"notes\": \"Nutrient pump blocked, waiting on replacement part\",\n  \"source_event_id\": \"evt-1\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/ingest/webhook", "host": ["{{baseUrl}}"], "path": ["ingest", "webhook"] },
+            "description": "A sensor alert. Normalizes to event_type=sensor_alert, tags=[ALERT, BLOCKER]."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('stored 1', () => pm.expect(pm.response.json().stored).to.eql(1));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Webhook - builder success (ALLOWED)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-VFarm-Token", "value": "{{webhookToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"builder\",\n  \"timestamp\": \"2026-07-13T21:30:00Z\",\n  \"location\": \"Pod A / Rack 1\",\n  \"notes\": \"Harvested basil, batch completed successfully\",\n  \"source_event_id\": \"evt-2\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/ingest/webhook", "host": ["{{baseUrl}}"], "path": ["ingest", "webhook"] },
+            "description": "A builder update. Normalizes to event_type=builder_update, tags=[SUCCESS]."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('stored 1', () => pm.expect(pm.response.json().stored).to.eql(1));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Webhook - idempotent re-delivery (no overwrite)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-VFarm-Token", "value": "{{webhookToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"sensor\",\n  \"timestamp\": \"2026-07-13T21:00:00Z\",\n  \"location\": \"Pod B / Rack 2\",\n  \"notes\": \"TAMPERED - should be ignored\",\n  \"source_event_id\": \"evt-1\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/ingest/webhook", "host": ["{{baseUrl}}"], "path": ["ingest", "webhook"] },
+            "description": "Same source_event_id as the sensor blocker, with tampered notes. Must be de-duplicated: stored=0, duplicates=1. The original row is never overwritten. (Run AFTER 'Webhook - sensor blocker'.)"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('stored 0', () => pm.expect(b.stored).to.eql(0));",
+                  "pm.test('duplicates 1', () => pm.expect(b.duplicates).to.eql(1));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Source B - Sheet",
+      "item": [
+        {
+          "name": "Sheet ingest (pull builder updates)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/ingest/sheet", "host": ["{{baseUrl}}"], "path": ["ingest", "sheet"] },
+            "description": "Pulls the CSV at SHEET_CSV_URL and ingests new rows. Idempotent: re-running returns stored=0, duplicates=N."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('has stored + duplicates', () => { const b = pm.response.json(); pm.expect(b).to.have.property('stored'); pm.expect(b).to.have.property('duplicates'); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Summary - Last 24 Hours",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": { "raw": "{{baseUrl}}/summary/last-24h", "host": ["{{baseUrl}}"], "path": ["summary", "last-24h"] },
+        "description": "Groups the last 24h by type and location, buckets blockers/successes/experiments. Structured for an AI agent to narrate."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const b = pm.response.json();",
+              "pm.test('has summary shape', () => { ['window_start','window_end','total_events','by_type','by_location','counts','blockers','successes','experiments'].forEach(k => pm.expect(b).to.have.property(k)); });"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
