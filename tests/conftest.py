@@ -10,3 +10,6 @@ _tmp.close()
 os.environ["DATABASE_URL"] = f"sqlite:///{_tmp.name}"
 os.environ["WEBHOOK_TOKEN"] = "test-token"
 os.environ.setdefault("SHEET_CSV_URL", "./sample_data/builder_updates.csv")
+# Force the narration fallback in tests: never call a real LLM, even if the
+# developer has an OPENAI_API_KEY exported in their shell.
+os.environ["OPENAI_API_KEY"] = ""

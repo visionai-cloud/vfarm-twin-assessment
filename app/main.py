@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .db import get_session, init_db
 from .ingest import ingest_events
-from .schemas import IngestResult, SummaryResponse, WebhookEvent
+from .narrate import narrate
+from .schemas import IngestResult, NarrationResponse, SummaryResponse, WebhookEvent
 from .sources.sheet import fetch_rows
 from .summary import summary_last_24h
 
@@ -63,3 +64,13 @@ def ingest_sheet(session: Session = Depends(get_session)) -> IngestResult:
 @app.get("/summary/last-24h", response_model=SummaryResponse)
 def summary(session: Session = Depends(get_session)) -> SummaryResponse:
     return SummaryResponse(**summary_last_24h(session))
+
+
+@app.get("/summary/last-24h/narrate", response_model=NarrationResponse)
+def summary_narrated(session: Session = Depends(get_session)) -> NarrationResponse:
+    """The AI layer: turns the deterministic summary into prose an operator can
+    read. Uses OpenAI when OPENAI_API_KEY is set, else a template fallback.
+    """
+    data = summary_last_24h(session)
+    result = narrate(data)
+    return NarrationResponse(summary=SummaryResponse(**data), **result)

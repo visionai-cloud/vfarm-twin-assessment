@@ -5,5 +5,7 @@ pydantic>=2.6
 pydantic-settings>=2.2
 python-dotenv>=1.0
 httpx>=0.27
+# AI narration (optional at runtime — falls back to a template if unset)
+openai>=1.0
 # dev / test
 pytest>=8.0

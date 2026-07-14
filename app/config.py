@@ -12,5 +12,9 @@ class Settings(BaseSettings):
     sheet_csv_url: str = "./sample_data/builder_updates.csv"
     sheet_poll_seconds: int = 300
 
+    # AI narration (optional). Empty key -> deterministic template fallback.
+    openai_api_key: str = ""
+    openai_model: str = "gpt-5.4-mini"
+
 
 settings = Settings()

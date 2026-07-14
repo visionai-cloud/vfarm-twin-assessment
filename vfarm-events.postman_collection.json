@@ -192,6 +192,28 @@
           }
         }
       ]
+    },
+    {
+      "name": "Summary - Narrated (AI)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": { "raw": "{{baseUrl}}/summary/last-24h/narrate", "host": ["{{baseUrl}}"], "path": ["summary", "last-24h", "narrate"] },
+        "description": "Turns the 24h summary into prose. Uses OpenAI when OPENAI_API_KEY is set on the server, otherwise a deterministic template. `generated_by` reports which was used."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const b = pm.response.json();",
+              "pm.test('has narration + provenance', () => { pm.expect(b).to.have.property('narration'); pm.expect(b).to.have.property('generated_by'); pm.expect(b).to.have.property('summary'); });"
+            ]
+          }
+        }
+      ]
     }
   ]
 }

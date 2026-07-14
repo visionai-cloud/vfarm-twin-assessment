@@ -63,3 +63,13 @@ class SummaryResponse(BaseModel):
     blockers: list[EventRef]
     successes: list[EventRef]
     experiments: list[EventRef]
+
+
+class NarrationResponse(BaseModel):
+    """Human-readable narration of the 24h summary + provenance."""
+
+    narration: str
+    generated_by: str = Field(description='"openai" or "fallback"')
+    model: Optional[str] = None
+    note: Optional[str] = None
+    summary: SummaryResponse

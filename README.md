@@ -24,7 +24,7 @@ uvicorn app.main:app --reload
 # in another shell — Source B: polls the sheet on a schedule
 python poller.py
 
-# run the tests (25, all green)
+# run the tests (30, all green)
 pytest -q
 ```
 
@@ -39,8 +39,11 @@ curl -X POST localhost:8000/ingest/webhook \
 # Source B — pull the builder-updates sheet now
 curl -X POST localhost:8000/ingest/sheet
 
-# The summary an AI would narrate
+# The structured summary an AI would narrate
 curl localhost:8000/summary/last-24h
+
+# The same summary, narrated into prose (LLM if OPENAI_API_KEY set, else template)
+curl localhost:8000/summary/last-24h/narrate
 ```
 
 ---
@@ -192,6 +195,33 @@ pods. Two blockers — most urgent, a nutrient-pump failure in Pod B. Two
 successes including a basil harvest in Pod A. One experiment is running in Pod C
 (16h vs 18h light cycle)."* The endpoint does the grouping; the LLM does the prose.
 
+## Where the AI lives (and where it deliberately doesn't)
+
+The ingestion / normalization / summary path is **100% deterministic** — no LLM,
+no network, fully unit-tested. AI hallucination and per-event cost have no place
+in the facts layer. The AI sits at exactly one edge:
+
+`GET /summary/last-24h/narrate` takes the *already-computed* summary and turns it
+into an operator briefing. The LLM is a **pure consumer** of deterministic data —
+it can only rephrase facts we hand it, never touch the store.
+
+```jsonc
+{
+  "narration": "In the last 24 hours the farm logged 4 events across 4 locations. 1 blocker needs attention — most notably pod-b: Nutrient pump blocked... 2 successes logged. 1 experiment running, including in pod-c.",
+  "generated_by": "openai",       // or "fallback"
+  "model": "gpt-5.4-mini",
+  "summary": { ... }               // the structured data it was built from
+}
+```
+
+- **`OPENAI_API_KEY` set** → OpenAI narrates (`app/narrate.py`, model via `OPENAI_MODEL`).
+- **Unset / call fails** → a deterministic **template** produces the same shape.
+  So the repo runs offline, at zero cost, and tests never hit the network.
+
+Provider is swappable — `narrate()` is the only function that does I/O; the prompt
+builder and fallback are pure. Smarter (LLM-based) *tagging* is a documented next
+step, intentionally left out to keep the derived layer cheap and re-derivable.
+
 ---
 
 ## How to extend
@@ -205,14 +235,15 @@ successes including a basil harvest in Pod A. One experiment is running in Pod C
 
 ## Testing
 
-25 tests, matching the surface:
+30 tests, matching the surface:
 
-- **Unit** (pure logic): `test_normalize.py`, `test_tagging.py`, `test_summary.py`, `test_sheet.py` — types, slugs, timestamp parsing (ISO/epoch/garbage), dedup-hash stability, tag rules, summary bucketing.
-- **Integration** (routes): `test_api.py` — webhook **auth-denied** (no token / wrong token) + **auth-allowed** + happy path, **idempotent re-delivery** (no silent overwrite), sheet ingest idempotency, and the summary buckets.
+- **Unit** (pure logic): `test_normalize.py`, `test_tagging.py`, `test_summary.py`, `test_sheet.py`, `test_narrate.py` — types, slugs, timestamp parsing (ISO/epoch/garbage), dedup-hash stability, tag rules, summary bucketing, narration prompt + template fallback.
+- **Integration** (routes): `test_api.py` — webhook **auth-denied** (no token / wrong token) + **auth-allowed** + happy path, **idempotent re-delivery** (no silent overwrite), sheet ingest idempotency, summary buckets, and the narrate endpoint's offline fallback.
 
 ```bash
-pytest -q      # -> 25 passed
+pytest -q
 ```
+→ `30 passed`
 
 ---
 

@@ -86,3 +86,14 @@ def test_summary_last_24h_buckets_recent_events():
     assert summary["total_events"] >= 1
     assert "by_type" in summary and "blockers" in summary
     assert summary["counts"]["blockers"] >= 1
+
+
+def test_narrate_endpoint_fallback_without_key():
+    # With no OPENAI_API_KEY in the test env, the endpoint must still return
+    # 200 with template-generated narration (no network call).
+    r = client.get("/summary/last-24h/narrate")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["generated_by"] == "fallback"
+    assert isinstance(body["narration"], str) and body["narration"]
+    assert "summary" in body
