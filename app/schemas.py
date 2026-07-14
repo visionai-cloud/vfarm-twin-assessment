@@ -63,6 +63,11 @@ class SummaryResponse(BaseModel):
     blockers: list[EventRef]
     successes: list[EventRef]
     experiments: list[EventRef]
+    truncated: bool = Field(
+        default=False,
+        description="True when the window held more events than the detail cap; "
+        "totals/groupings stay accurate, detail lists cover the most recent events.",
+    )
 
 
 class NarrationResponse(BaseModel):

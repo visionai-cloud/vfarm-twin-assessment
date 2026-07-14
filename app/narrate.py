@@ -16,6 +16,9 @@ import json
 from typing import Optional
 
 from .config import settings
+from .log import get_logger
+
+logger = get_logger(__name__)
 
 SYSTEM_PROMPT = (
     "You are the narrator for a digital vertical farm. Given a structured "
@@ -106,6 +109,7 @@ def narrate(summary: dict) -> dict:
             raise ValueError("empty completion")
         return {"narration": text, "generated_by": "openai", "model": settings.openai_model}
     except Exception as exc:  # network / auth / quota -> never fail the endpoint
+        logger.warning("narration LLM unavailable (%s); using template fallback", type(exc).__name__)
         return {
             "narration": template_narration(summary),
             "generated_by": "fallback",

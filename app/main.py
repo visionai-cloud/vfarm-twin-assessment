@@ -3,24 +3,36 @@ and the 24h summary endpoint.
 """
 from __future__ import annotations
 
+import secrets
 from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from .config import settings
+from .config import DEFAULT_WEBHOOK_TOKEN, settings
 from .db import get_session, init_db
 from .ingest import ingest_events
+from .log import get_logger, setup_logging
 from .narrate import narrate
 from .schemas import IngestResult, NarrationResponse, SummaryResponse, WebhookEvent
 from .sources.sheet import fetch_rows
 from .summary import summary_last_24h
 
+logger = get_logger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    setup_logging()
+    # Fail fast: never run production with the shipped placeholder token.
+    if settings.environment == "production" and settings.webhook_token == DEFAULT_WEBHOOK_TOKEN:
+        raise RuntimeError("WEBHOOK_TOKEN is still the default placeholder; set a real secret.")
+    if settings.webhook_token == DEFAULT_WEBHOOK_TOKEN:
+        logger.warning("WEBHOOK_TOKEN is the default placeholder — fine for dev, unsafe in prod.")
     init_db()
+    logger.info("vFarm API started (env=%s)", settings.environment)
     yield
 
 
@@ -30,15 +42,27 @@ app = FastAPI(title="vFarm Event Ingestion + Summary", version="1.0.0", lifespan
 def require_webhook_token(x_vfarm_token: Optional[str] = Header(default=None)) -> None:
     """Authenticate Source A. Webhooks are public URLs, so a shared secret is
     the minimum bar; swap for HMAC signature verification in production.
+
+    Uses a constant-time compare to avoid leaking the token via response timing.
     """
-    if x_vfarm_token != settings.webhook_token:
+    if x_vfarm_token is None or not secrets.compare_digest(
+        x_vfarm_token, settings.webhook_token
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid or missing webhook token"
         )
 
 
 @app.get("/health")
-def health() -> dict:
+def health(session: Session = Depends(get_session)) -> dict:
+    """Liveness + readiness: also verifies the DB is reachable."""
+    try:
+        session.execute(text("SELECT 1"))
+    except Exception:
+        logger.exception("health check: database unreachable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="database unreachable"
+        )
     return {"status": "ok"}
 
 

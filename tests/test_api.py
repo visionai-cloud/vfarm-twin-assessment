@@ -14,6 +14,12 @@ def setup_module() -> None:
     init_db()
 
 
+def test_health_ok_with_db():
+    r = client.get("/health")
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
+
+
 def _payload(**over):
     base = {
         "type": "sensor",

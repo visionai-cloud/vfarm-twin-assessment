@@ -10,11 +10,15 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from .log import get_logger
 from .models import SCHEMA_VERSION, FarmEvent
 from .normalize import normalize_event
 from .tagging import derive_tags
+
+logger = get_logger(__name__)
 
 
 def _new_id() -> str:
@@ -71,7 +75,7 @@ def ingest_events(session: Session, source: str, raw_payloads: list[dict]) -> di
         seen_in_batch.add(event.dedup_hash)
         candidates.append(event)
 
-    # Dedup against what's already stored.
+    # Fast path: skip hashes we already know about (one round-trip).
     if candidates:
         hashes = [e.dedup_hash for e in candidates]
         existing = set(
@@ -83,8 +87,19 @@ def ingest_events(session: Session, source: str, raw_payloads: list[dict]) -> di
             if event.dedup_hash in existing:
                 duplicates += 1
                 continue
-            session.add(event)
-            stored_ids.append(event.id)
+            # Safety net for the check-then-insert race: a concurrent request
+            # may insert the same dedup_hash between our SELECT and INSERT. The
+            # UNIQUE constraint is the source of truth; a savepoint lets us
+            # absorb the collision as a duplicate without aborting the batch.
+            try:
+                with session.begin_nested():
+                    session.add(event)
+                stored_ids.append(event.id)
+            except IntegrityError:
+                duplicates += 1
         session.commit()
 
+    logger.info(
+        "ingest source=%s stored=%d duplicates=%d", source, len(stored_ids), duplicates
+    )
     return {"stored": len(stored_ids), "duplicates": duplicates, "ids": stored_ids}

@@ -24,7 +24,7 @@ uvicorn app.main:app --reload
 # in another shell — Source B: polls the sheet on a schedule
 python poller.py
 
-# run the tests (30, all green)
+# run the tests (35, all green)
 pytest -q
 ```
 
@@ -186,7 +186,8 @@ skeleton, then the actual events an agent would quote:
   "counts":      { "blockers": 2, "successes": 2, "experiments": 1 },
   "blockers":    [ { "location": "pod-b", "notes": "Nutrient pump blocked, waiting on part", "tags": ["ALERT","BLOCKER"] }, ... ],
   "successes":   [ ... ],
-  "experiments": [ ... ]
+  "experiments": [ ... ],
+  "truncated":   false
 }
 ```
 
@@ -235,17 +236,44 @@ step, intentionally left out to keep the derived layer cheap and re-derivable.
 
 ## Testing
 
-30 tests, matching the surface:
+35 tests, matching the surface:
 
-- **Unit** (pure logic): `test_normalize.py`, `test_tagging.py`, `test_summary.py`, `test_sheet.py`, `test_narrate.py` — types, slugs, timestamp parsing (ISO/epoch/garbage), dedup-hash stability, tag rules, summary bucketing, narration prompt + template fallback.
-- **Integration** (routes): `test_api.py` — webhook **auth-denied** (no token / wrong token) + **auth-allowed** + happy path, **idempotent re-delivery** (no silent overwrite), sheet ingest idempotency, summary buckets, and the narrate endpoint's offline fallback.
+- **Unit** (pure logic): `test_normalize.py`, `test_tagging.py`, `test_summary.py`, `test_sheet.py`, `test_narrate.py` — types, slugs, timestamp parsing (ISO/epoch/garbage), dedup-hash stability, tag rules, summary bucketing, narration prompt + template fallback + the `max_completion_tokens` regression.
+- **Service / integration**: `test_ingest.py` — service-level idempotency, batch-internal dedup, summary truncation with SQL-accurate totals. `test_api.py` — DB-backed health, webhook **auth-denied** (no token / wrong token) + **auth-allowed** + happy path, **idempotent re-delivery** (no silent overwrite), sheet ingest idempotency, summary buckets, and the narrate endpoint's offline fallback.
 
 ```bash
 pytest -q
 ```
-→ `30 passed`
+→ `35 passed`
 
 ---
+
+## Production hardening
+
+Beyond the happy path, the code carries the guards a production service needs:
+
+- **Concurrency-safe idempotency** — check-then-insert is racy under load, so the
+  `UNIQUE(dedup_hash)` constraint is the source of truth: each insert runs in a
+  `SAVEPOINT` and a colliding write from a concurrent request is absorbed as a
+  duplicate instead of 500-ing the batch (`ingest.py`).
+- **Scalable summary** — totals and `by_type`/`by_location` are computed in SQL
+  (indexed columns), and only a bounded set of events is pulled into memory for
+  the detail buckets. When the window exceeds `SUMMARY_DETAIL_LIMIT`, the
+  response sets `"truncated": true` and it's logged — no silent capping.
+- **Constant-time auth** — the webhook token is compared with
+  `secrets.compare_digest` to avoid a timing side-channel.
+- **Fail-fast config** — starting in `ENVIRONMENT=production` with the default
+  placeholder token raises on boot; in dev it logs a warning.
+- **Real health check** — `GET /health` executes `SELECT 1` and returns **503**
+  if the DB is unreachable (readiness, not just liveness).
+- **Structured logging** — a single `setup_logging()`; ingestion, truncation, and
+  LLM-fallback events are logged (no `print`s).
+
+**Known next steps** (out of scope for a v0, called out honestly): **Alembic**
+migrations instead of `create_all`; rate-limiting the webhook; HMAC signature
+verification instead of a shared token; and on SQLite, `event_time` round-trips
+as naive (Postgres preserves tz) — fine for the demo, worth normalizing at the
+edge in production.
 
 ## Future-proofing for the "farm twin"
 

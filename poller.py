@@ -11,7 +11,10 @@ import time
 from app.config import settings
 from app.db import SessionLocal, init_db
 from app.ingest import ingest_events
+from app.log import get_logger, setup_logging
 from app.sources.sheet import fetch_rows
+
+logger = get_logger("poller")
 
 
 def poll_once() -> dict:
@@ -24,14 +27,14 @@ def poll_once() -> dict:
 
 
 def main() -> None:
+    setup_logging()
     init_db()
-    print(f"[poller] polling {settings.sheet_csv_url} every {settings.sheet_poll_seconds}s")
+    logger.info("polling %s every %ss", settings.sheet_csv_url, settings.sheet_poll_seconds)
     while True:
         try:
-            result = poll_once()
-            print(f"[poller] stored={result['stored']} duplicates={result['duplicates']}")
-        except Exception as exc:  # keep the loop alive on transient fetch errors
-            print(f"[poller] error: {exc}")
+            poll_once()
+        except Exception:  # keep the loop alive on transient fetch errors
+            logger.exception("poll failed")
         time.sleep(settings.sheet_poll_seconds)
 
 
